@@ -397,17 +397,17 @@ jobs:
           total_checks=10
           failed_checks=0
           
-          # Check each service status (handle empty outputs)
-          [[ "${{ needs.kubernetes-pod-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.kubernetes-node-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.rewardsy-backend-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.rewardsy-webapp-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.rewardsy-merchant-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.rewardsy-data-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.rewardsy-suprpixl-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.kibana-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.kafka-ui-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
-          [[ "${{ needs.ingress-nginx-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          # Check each service status (handle empty outputs) - use || true to prevent exit on error
+          [[ "${{ needs.kubernetes-pod-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.kubernetes-node-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.rewardsy-backend-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.rewardsy-webapp-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.rewardsy-merchant-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.rewardsy-data-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.rewardsy-suprpixl-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.kibana-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.kafka-ui-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          [[ "${{ needs.ingress-nginx-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
           
           echo "failed_checks=$failed_checks" >> $GITHUB_OUTPUT
           echo "total_checks=$total_checks" >> $GITHUB_OUTPUT
