@@ -69,6 +69,7 @@ jobs:
       
       - name: Check pod health across application namespaces
         id: pod_check
+        continue-on-error: true
         run: |
           # Application namespaces to monitor
           NAMESPACES="rewardsy-backend rewardsy-webapp rewardsy-data rewardsy-merchant rewardsy-suprpixl kafka ingress-nginx"
@@ -139,6 +140,7 @@ jobs:
       
       - name: Check node health and utilization
         id: node_check
+        continue-on-error: true
         run: |
           # Get node status
           notready_nodes=$(kubectl get nodes --no-headers | grep -v "Ready" | awk '{print $1}' || echo "")
@@ -174,7 +176,6 @@ jobs:
   # APPLICATION SERVICE HEALTH CHECKS
   # ================================================================
 
-  # ---------- REWARDSY BACKEND ----------
   rewardsy-backend-health:
     runs-on: ubuntu-latest
     outputs:
@@ -184,6 +185,7 @@ jobs:
     steps:
       - name: Check backend health
         id: health_check
+        continue-on-error: true
         run: |
           start_time=$(date +%s%N)
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_BACKEND_URL }}/docs/core)
@@ -200,7 +202,6 @@ jobs:
             echo "✅ Backend healthy (${response_time}ms)"
           fi
 
-  # ---------- REWARDSY WEBAPP ----------
   rewardsy-webapp-health:
     runs-on: ubuntu-latest
     outputs:
@@ -210,6 +211,7 @@ jobs:
     steps:
       - name: Check webapp health
         id: health_check
+        continue-on-error: true
         run: |
           start_time=$(date +%s%N)
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_WEBAPP_URL }})
@@ -226,7 +228,6 @@ jobs:
             echo "✅ WebApp healthy (${response_time}ms)"
           fi
 
-  # ---------- REWARDSY MERCHANT ----------
   rewardsy-merchant-health:
     runs-on: ubuntu-latest
     outputs:
@@ -236,6 +237,7 @@ jobs:
     steps:
       - name: Check merchant service health
         id: health_check
+        continue-on-error: true
         run: |
           start_time=$(date +%s%N)
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_MERCHANT_URL }} || echo "000")
@@ -245,7 +247,6 @@ jobs:
           echo "response_code=$response" >> $GITHUB_OUTPUT
           echo "response_time=${response_time}ms" >> $GITHUB_OUTPUT
           
-          # Accept 200, 302, 404 as healthy (some services redirect)
           if [ "$response" != "200" ] && [ "$response" != "302" ] && [ "$response" != "404" ]; then
             echo "❌ Merchant service health check failed! HTTP: $response"
             exit 1
@@ -253,7 +254,6 @@ jobs:
             echo "✅ Merchant service healthy (${response_time}ms)"
           fi
 
-  # ---------- REWARDSY DATA ----------
   rewardsy-data-health:
     runs-on: ubuntu-latest
     outputs:
@@ -262,11 +262,10 @@ jobs:
     steps:
       - name: Check data service health
         id: health_check
+        continue-on-error: true
         run: |
-          # Try ingress first
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_DATA_URL }}/health || echo "000")
           
-          # Fallback to direct LoadBalancer IP
           if [ "$response" = "000" ] || [ "$response" = "404" ]; then
             echo "Trying direct LoadBalancer IP..."
             response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.DATA_SERVICE_LB_IP }}/health || echo "000")
@@ -281,7 +280,6 @@ jobs:
             echo "✅ Data service healthy"
           fi
 
-  # ---------- REWARDSY SUPRPIXL  ----------
   rewardsy-suprpixl-health:
     runs-on: ubuntu-latest
     outputs:
@@ -291,13 +289,13 @@ jobs:
     steps:
       - name: Check SuprPixl service health
         id: health_check
+        continue-on-error: true
         run: |
           start_time=$(date +%s%N)
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_SUPRPIXL_URL }} || echo "000")
           end_time=$(date +%s%N)
           response_time=$(( (end_time - start_time) / 1000000 ))
           
-          # Fallback to direct IP if ingress fails
           if [ "$response" = "000" ]; then
             response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.SUPRPIXL_SERVICE_LB_IP }} || echo "000")
           fi
@@ -312,11 +310,6 @@ jobs:
             echo "✅ SuprPixl service healthy (${response_time}ms)"
           fi
 
-  # ================================================================
-  # SUPPORTING SERVICES HEALTH CHECKS
-  # ================================================================
-
-  # ---------- KIBANA ----------
   kibana-health:
     runs-on: ubuntu-latest
     outputs:
@@ -325,12 +318,12 @@ jobs:
     steps:
       - name: Check Kibana health
         id: health_check
+        continue-on-error: true
         run: |
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.KIBANA_URL }}/app/home || echo "000")
           
           echo "response_code=$response" >> $GITHUB_OUTPUT
           
-          # Kibana often redirects (302) or returns 200
           if [ "$response" != "200" ] && [ "$response" != "302" ]; then
             echo "❌ Kibana health check failed! HTTP: $response"
             exit 1
@@ -338,7 +331,6 @@ jobs:
             echo "✅ Kibana healthy"
           fi
 
-  # ---------- KAFKA UI ----------
   kafka-ui-health:
     runs-on: ubuntu-latest
     outputs:
@@ -347,6 +339,7 @@ jobs:
     steps:
       - name: Check Kafka UI health
         id: health_check
+        continue-on-error: true
         run: |
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.KAFKA_UI_URL }} || echo "000")
           
@@ -359,7 +352,6 @@ jobs:
             echo "✅ Kafka UI healthy"
           fi
 
-  # ---------- INGRESS NGINX ----------
   ingress-nginx-health:
     runs-on: ubuntu-latest
     outputs:
@@ -367,11 +359,10 @@ jobs:
     steps:
       - name: Check Ingress NGINX health
         id: health_check
+        continue-on-error: true
         run: |
-          # Check if ingress is responsive
           response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.INGRESS_NGINX_IP }}/healthz || echo "000")
           
-          # NGINX healthz typically returns 200 or 404
           if [ "$response" != "200" ] && [ "$response" != "404" ]; then
             echo "⚠️ Ingress NGINX health check warning! HTTP: $response"
             exit 1
@@ -406,17 +397,17 @@ jobs:
           total_checks=10
           failed_checks=0
           
-          # Check each service status
-          [ "${{ needs.kubernetes-pod-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.kubernetes-node-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.rewardsy-backend-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.rewardsy-webapp-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.rewardsy-merchant-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.rewardsy-data-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.rewardsy-suprpixl-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.kibana-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.kafka-ui-health.outputs.status }}" = "failure" ] && ((failed_checks++))
-          [ "${{ needs.ingress-nginx-health.outputs.status }}" = "failure" ] && ((failed_checks++))
+          # Check each service status (handle empty outputs)
+          [[ "${{ needs.kubernetes-pod-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.kubernetes-node-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.rewardsy-backend-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.rewardsy-webapp-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.rewardsy-merchant-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.rewardsy-data-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.rewardsy-suprpixl-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.kibana-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.kafka-ui-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
+          [[ "${{ needs.ingress-nginx-health.outputs.status }}" == "failure" ]] && ((failed_checks++))
           
           echo "failed_checks=$failed_checks" >> $GITHUB_OUTPUT
           echo "total_checks=$total_checks" >> $GITHUB_OUTPUT
@@ -424,15 +415,15 @@ jobs:
           # Determine severity level
           if [ $failed_checks -eq 0 ]; then
             echo "severity=healthy" >> $GITHUB_OUTPUT
-            echo "color=3066993" >> $GITHUB_OUTPUT  # Green
+            echo "color=3066993" >> $GITHUB_OUTPUT
             echo "emoji=✅" >> $GITHUB_OUTPUT
           elif [ $failed_checks -le 2 ]; then
             echo "severity=warning" >> $GITHUB_OUTPUT
-            echo "color=16776960" >> $GITHUB_OUTPUT  # Yellow/Orange
+            echo "color=16776960" >> $GITHUB_OUTPUT
             echo "emoji=⚠️" >> $GITHUB_OUTPUT
           else
             echo "severity=critical" >> $GITHUB_OUTPUT
-            echo "color=15158332" >> $GITHUB_OUTPUT  # Red
+            echo "color=15158332" >> $GITHUB_OUTPUT
             echo "emoji=🔴" >> $GITHUB_OUTPUT
           fi
 
@@ -447,25 +438,25 @@ jobs:
             @everyone **IMMEDIATE ATTENTION REQUIRED**
             
             **🏗️ Infrastructure Health:**
-            ${{ needs.kubernetes-node-health.outputs.status == 'failure' && '🔴' || '✅' }} AKS Nodes - ${{ needs.kubernetes-node-health.outputs.node_count }} nodes (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory }})
-            ${{ needs.kubernetes-pod-health.outputs.status == 'failure' && '🔴' || '✅' }} Kubernetes Pods - ${{ needs.kubernetes-pod-health.outputs.total_pods }} total pods
+            ${{ needs.kubernetes-node-health.outputs.status == 'failure' && '🔴' || '✅' }} AKS Nodes - ${{ needs.kubernetes-node-health.outputs.node_count || 'N/A' }} nodes (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory || 'N/A' }})
+            ${{ needs.kubernetes-pod-health.outputs.status == 'failure' && '🔴' || '✅' }} Kubernetes Pods - ${{ needs.kubernetes-pod-health.outputs.total_pods || 'N/A' }} total pods
             
             **🚀 Application Services:**
-            ${{ needs.rewardsy-backend-health.outputs.status == 'failure' && '🔴' || '✅' }} Backend - [${{ needs.rewardsy-backend-health.outputs.response_code }}] (${{ needs.rewardsy-backend-health.outputs.response_time }})
-            ${{ needs.rewardsy-webapp-health.outputs.status == 'failure' && '🔴' || '✅' }} WebApp - [${{ needs.rewardsy-webapp-health.outputs.response_code }}] (${{ needs.rewardsy-webapp-health.outputs.response_time }})
-            ${{ needs.rewardsy-merchant-health.outputs.status == 'failure' && '🔴' || '✅' }} Merchant - [${{ needs.rewardsy-merchant-health.outputs.response_code }}] (${{ needs.rewardsy-merchant-health.outputs.response_time }})
-            ${{ needs.rewardsy-data-health.outputs.status == 'failure' && '🔴' || '✅' }} Data Service - [${{ needs.rewardsy-data-health.outputs.response_code }}]
-            ${{ needs.rewardsy-suprpixl-health.outputs.status == 'failure' && '🔴' || '✅' }} SuprPixl - [${{ needs.rewardsy-suprpixl-health.outputs.response_code }}] (${{ needs.rewardsy-suprpixl-health.outputs.response_time }})
+            ${{ needs.rewardsy-backend-health.outputs.status == 'failure' && '🔴' || '✅' }} Backend - [${{ needs.rewardsy-backend-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-backend-health.outputs.response_time || 'N/A' }})
+            ${{ needs.rewardsy-webapp-health.outputs.status == 'failure' && '🔴' || '✅' }} WebApp - [${{ needs.rewardsy-webapp-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-webapp-health.outputs.response_time || 'N/A' }})
+            ${{ needs.rewardsy-merchant-health.outputs.status == 'failure' && '🔴' || '✅' }} Merchant - [${{ needs.rewardsy-merchant-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-merchant-health.outputs.response_time || 'N/A' }})
+            ${{ needs.rewardsy-data-health.outputs.status == 'failure' && '🔴' || '✅' }} Data Service - [${{ needs.rewardsy-data-health.outputs.response_code || 'N/A' }}]
+            ${{ needs.rewardsy-suprpixl-health.outputs.status == 'failure' && '🔴' || '✅' }} SuprPixl - [${{ needs.rewardsy-suprpixl-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-suprpixl-health.outputs.response_time || 'N/A' }})
             
             **🔧 Supporting Services:**
-            ${{ needs.kibana-health.outputs.status == 'failure' && '🔴' || '✅' }} Kibana - [${{ needs.kibana-health.outputs.response_code }}]
-            ${{ needs.kafka-ui-health.outputs.status == 'failure' && '🔴' || '✅' }} Kafka UI - [${{ needs.kafka-ui-health.outputs.response_code }}]
+            ${{ needs.kibana-health.outputs.status == 'failure' && '🔴' || '✅' }} Kibana - [${{ needs.kibana-health.outputs.response_code || 'N/A' }}]
+            ${{ needs.kafka-ui-health.outputs.status == 'failure' && '🔴' || '✅' }} Kafka UI - [${{ needs.kafka-ui-health.outputs.response_code || 'N/A' }}]
             ${{ needs.ingress-nginx-health.outputs.status == 'failure' && '🔴' || '✅' }} Ingress NGINX
             
-            ${{ needs.kubernetes-pod-health.outputs.problem_count != '0' && format('**⚠️ Problematic Pods ({0}):**\n```\n{1}\n```', needs.kubernetes-pod-health.outputs.problem_count, needs.kubernetes-pod-health.outputs.problematic_pods) || '' }}
+            ${{ needs.kubernetes-pod-health.outputs.problem_count != '0' && needs.kubernetes-pod-health.outputs.problem_count != '' && format('**⚠️ Problematic Pods ({0}):**\n```\n{1}\n```', needs.kubernetes-pod-health.outputs.problem_count, needs.kubernetes-pod-health.outputs.problematic_pods) || '' }}
             
             **🔗 Actions:**
-            [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
             [Azure Portal](https://portal.azure.com/#@rewardsy.com/resource/subscriptions/4b9e0373-83d3-42e8-95f9-be6625019af0/resourceGroups/rewardsy-prod-rg/providers/Microsoft.ContainerService/managedClusters/rewardsy-prod-aks/workloads)
           color: ${{ steps.summary.outputs.color }}
           username: Rewardsy Health Monitor
@@ -482,15 +473,15 @@ jobs:
             **📊 Rewardsy Production Environment - Healthy**
             
             **Infrastructure:**
-            ✅ AKS Nodes: ${{ needs.kubernetes-node-health.outputs.node_count }} (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory }})
-            ✅ Application Pods: ${{ needs.kubernetes-pod-health.outputs.total_pods }}
+            ✅ AKS Nodes: ${{ needs.kubernetes-node-health.outputs.node_count || 'N/A' }} (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory || 'N/A' }})
+            ✅ Application Pods: ${{ needs.kubernetes-pod-health.outputs.total_pods || 'N/A' }}
             
             **Application Services:**
-            ✅ Backend (${{ needs.rewardsy-backend-health.outputs.response_time }})
-            ✅ WebApp (${{ needs.rewardsy-webapp-health.outputs.response_time }})
-            ✅ Merchant (${{ needs.rewardsy-merchant-health.outputs.response_time }})
+            ✅ Backend (${{ needs.rewardsy-backend-health.outputs.response_time || 'N/A' }})
+            ✅ WebApp (${{ needs.rewardsy-webapp-health.outputs.response_time || 'N/A' }})
+            ✅ Merchant (${{ needs.rewardsy-merchant-health.outputs.response_time || 'N/A' }})
             ✅ Data Service
-            ✅ SuprPixl (${{ needs.rewardsy-suprpixl-health.outputs.response_time }})
+            ✅ SuprPixl (${{ needs.rewardsy-suprpixl-health.outputs.response_time || 'N/A' }})
             
             **Supporting Services:**
             ✅ Kibana
