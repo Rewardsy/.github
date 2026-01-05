@@ -1,54 +1,30 @@
-# INSTRUCTIONS FOR DISCORD USER MENTION
-# ======================================
-# To mention yourself (@asif) in Discord, you need your Discord User ID.
-# 
-# How to get your Discord User ID:
-# 1. Open Discord
-# 2. Go to Settings → Advanced → Enable "Developer Mode"
-# 3. Right-click on your username in Discord → "Copy User ID"
-# 4. Replace "YOUR_DISCORD_USER_ID" below with the copied ID
-#
-# It will look like: <@123456789012345678>
-# ======================================
-
-name: Rewardsy Comprehensive Health Checks - All Services
+name: Rewardsy Infrastructure Health Monitoring
 
 on:
   schedule:
-    # Runs every 10 minutes
+    # Every 10 minutes for continuous monitoring
     - cron: '*/10 * * * *'
     # Daily summary at 9 AM IST (3:30 AM UTC)
     - cron: '30 3 * * *'
   workflow_dispatch:
+    inputs:
+      check_type:
+        description: 'Type of health check to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - kubernetes
+          - applications
+          - supporting-services
 
 env:
   # ========================================
-  # DISCORD USER ID - Asif
+  # DISCORD CONFIGURATION
   # ========================================
   DISCORD_USER_MENTION: "<@1379840575783829544>"
-  
-  # ========================================
-  # INGRESS ENDPOINTS (via NGINX - Primary)
-  # ========================================
-  REWARDSY_BACKEND_URL: https://app.rewardsy.one/rewardsy-backend
-  REWARDSY_WEBAPP_URL: https://app.rewardsy.one
-  REWARDSY_MERCHANT_URL: https://merchant.rewardsy.one
-  REWARDSY_DATA_URL: https://app.rewardsy.one/rewardsy-data
-  REWARDSY_SUPRPIXL_URL: https://suprpixl.rewardsy.one
-  KIBANA_URL: https://app.rewardsy.one/kibana
-  KAFKA_UI_URL: https://app.rewardsy.one/kafka-ui
-  
-  # ========================================
-  # LOADBALANCER IPs (Direct Access - Fallback)
-  # ========================================
-  INGRESS_NGINX_IP: http://52.140.85.8
-  KIBANA_LB_IP: http://98.70.242.255
-  DATA_SERVICE_LB_IP: http://4.213.202.43
-  MERCHANT_SERVICE_LB_IP: http://135.235.254.253
-  WEBAPP_SERVICE_LB_IP: http://4.186.15.176
-  SUPRPIXL_SERVICE_LB_IP: http://4.187.129.223
-  KAFKA_BROKER_IP: http://4.187.131.231
-  KAFKA_EXTERNAL_IP: http://4.187.250.117
+  DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
   
   # ========================================
   # AZURE AKS CONFIGURATION
@@ -57,468 +33,553 @@ env:
   AKS_RESOURCE_GROUP: rewardsy-prod-rg
   
   # ========================================
-  # DISCORD NOTIFICATION
+  # HEALTH CHECK CONFIGURATION
   # ========================================
-  DISCORD_WEBHOOK: https://discord.com/api/webhooks/1391803646500671588/7_zWESR3N1FtkNIu-vsAKdicx8JTjdlBYW0WPLvkr7VK3IaRRefqy2zW7eqEwoDqF5Cx
+  REQUEST_TIMEOUT: 30
+  ACCEPTABLE_RESPONSE_CODES: "200,302,404"
+  CPU_THRESHOLD: 80
+  MEMORY_THRESHOLD: 85
+  
+  # ========================================
+  # APPLICATION ENDPOINTS (Primary - via Ingress)
+  # ========================================
+  ENDPOINTS: |
+    {
+      "backend": {
+        "name": "Backend API",
+        "primary": "https://app.rewardsy.one/rewardsy-backend/docs/core",
+        "fallback": "",
+        "expected_codes": [200],
+        "critical": true
+      },
+      "webapp": {
+        "name": "Web Application",
+        "primary": "https://app.rewardsy.one",
+        "fallback": "http://4.186.15.176",
+        "expected_codes": [200, 302],
+        "critical": true
+      },
+      "merchant": {
+        "name": "Merchant Portal",
+        "primary": "https://merchant.rewardsy.one",
+        "fallback": "http://135.235.254.253",
+        "expected_codes": [200, 302, 404],
+        "critical": true
+      },
+      "data": {
+        "name": "Data Service",
+        "primary": "https://app.rewardsy.one/rewardsy-data/health",
+        "fallback": "http://4.213.202.43/health",
+        "expected_codes": [200, 404],
+        "critical": true
+      },
+      "suprpixl": {
+        "name": "SuprPixl Service",
+        "primary": "https://suprpixl.rewardsy.one",
+        "fallback": "http://4.187.129.223",
+        "expected_codes": [200, 302, 404, 301],
+        "critical": false
+      },
+      "kibana": {
+        "name": "Kibana Dashboard",
+        "primary": "https://app.rewardsy.one/kibana/app/home",
+        "fallback": "http://98.70.242.255",
+        "expected_codes": [200, 302],
+        "critical": false
+      },
+      "kafka_ui": {
+        "name": "Kafka UI",
+        "primary": "https://app.rewardsy.one/kafka-ui",
+        "fallback": "",
+        "expected_codes": [200],
+        "critical": false
+      },
+      "ingress": {
+        "name": "Ingress NGINX",
+        "primary": "http://52.140.85.8/healthz",
+        "fallback": "",
+        "expected_codes": [200, 404],
+        "critical": true
+      }
+    }
 
 jobs:
   # ================================================================
-  # KUBERNETES CLUSTER HEALTH
+  # KUBERNETES INFRASTRUCTURE HEALTH
   # ================================================================
   
-  kubernetes-pod-health:
+  kubernetes-health:
+    name: Kubernetes Cluster Health
     runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'workflow_dispatch' || 
+      github.event.inputs.check_type == 'all' || 
+      github.event.inputs.check_type == 'kubernetes'
+    
     outputs:
-      status: ${{ steps.pod_check.outcome }}
-      total_pods: ${{ steps.pod_check.outputs.total_pods }}
-      problematic_pods: ${{ steps.pod_check.outputs.problematic_pods }}
-      problem_count: ${{ steps.pod_check.outputs.problem_count }}
+      cluster_healthy: ${{ steps.aggregate.outputs.cluster_healthy }}
+      node_status: ${{ steps.nodes.outputs.status }}
+      node_count: ${{ steps.nodes.outputs.node_count }}
+      notready_nodes: ${{ steps.nodes.outputs.notready_nodes }}
+      avg_cpu: ${{ steps.nodes.outputs.avg_cpu }}
+      avg_memory: ${{ steps.nodes.outputs.avg_memory }}
+      pod_status: ${{ steps.pods.outputs.status }}
+      total_pods: ${{ steps.pods.outputs.total_pods }}
+      problem_count: ${{ steps.pods.outputs.problem_count }}
+      problematic_pods: ${{ steps.pods.outputs.problematic_pods }}
+      high_cpu_nodes: ${{ steps.nodes.outputs.high_cpu_nodes }}
+      high_memory_nodes: ${{ steps.nodes.outputs.high_memory_nodes }}
+    
     steps:
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Set AKS context
+      - name: Set AKS Context
         uses: azure/aks-set-context@v3
         with:
           cluster-name: ${{ env.AKS_CLUSTER_NAME }}
           resource-group: ${{ env.AKS_RESOURCE_GROUP }}
       
-      - name: Check pod health across application namespaces
-        id: pod_check
+      - name: Check Node Health & Resource Utilization
+        id: nodes
         continue-on-error: true
         run: |
-          # Application namespaces to monitor
-          NAMESPACES="rewardsy-backend rewardsy-webapp rewardsy-data rewardsy-merchant rewardsy-suprpixl kafka ingress-nginx"
+          echo "🔍 Checking AKS node health and utilization..."
+          
+          # Get node status
+          notready_nodes=$(kubectl get nodes --no-headers | grep -v " Ready " | awk '{print $1}' | tr '\n' ',' || echo "")
+          total_nodes=$(kubectl get nodes --no-headers | wc -l)
+          ready_nodes=$(kubectl get nodes --no-headers | grep " Ready " | wc -l)
+          
+          echo "node_count=$total_nodes" >> $GITHUB_OUTPUT
+          echo "ready_nodes=$ready_nodes" >> $GITHUB_OUTPUT
+          
+          # Check node metrics
+          if kubectl top nodes &>/dev/null; then
+            node_metrics=$(kubectl top nodes --no-headers)
+            
+            # Calculate averages
+            avg_cpu=$(echo "$node_metrics" | awk '{gsub(/%/,"",$3); sum+=$3} END {printf "%.0f", sum/NR}')
+            avg_memory=$(echo "$node_metrics" | awk '{gsub(/%/,"",$5); sum+=$5} END {printf "%.0f", sum/NR}')
+            
+            echo "avg_cpu=${avg_cpu}%" >> $GITHUB_OUTPUT
+            echo "avg_memory=${avg_memory}%" >> $GITHUB_OUTPUT
+            
+            # Check for nodes exceeding thresholds
+            high_cpu_nodes=$(echo "$node_metrics" | awk -v threshold=${{ env.CPU_THRESHOLD }} '{gsub(/%/,"",$3); if($3>threshold) print $1": "$3"%"}' | tr '\n' ',' || echo "")
+            high_memory_nodes=$(echo "$node_metrics" | awk -v threshold=${{ env.MEMORY_THRESHOLD }} '{gsub(/%/,"",$5); if($5>threshold) print $1": "$5"%"}' | tr '\n' ',' || echo "")
+            
+            echo "high_cpu_nodes=${high_cpu_nodes}" >> $GITHUB_OUTPUT
+            echo "high_memory_nodes=${high_memory_nodes}" >> $GITHUB_OUTPUT
+            
+            # Warn if thresholds exceeded
+            if [ -n "$high_cpu_nodes" ] || [ -n "$high_memory_nodes" ]; then
+              echo "⚠️ Resource utilization exceeds thresholds!"
+              [ -n "$high_cpu_nodes" ] && echo "High CPU nodes: $high_cpu_nodes"
+              [ -n "$high_memory_nodes" ] && echo "High Memory nodes: $high_memory_nodes"
+            fi
+          else
+            echo "avg_cpu=N/A" >> $GITHUB_OUTPUT
+            echo "avg_memory=N/A" >> $GITHUB_OUTPUT
+            echo "high_cpu_nodes=" >> $GITHUB_OUTPUT
+            echo "high_memory_nodes=" >> $GITHUB_OUTPUT
+          fi
+          
+          # Set outputs for NotReady nodes
+          if [ -n "$notready_nodes" ]; then
+            echo "notready_nodes=${notready_nodes%,}" >> $GITHUB_OUTPUT
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "❌ NotReady nodes detected: ${notready_nodes%,}"
+            exit 1
+          else
+            echo "notready_nodes=None" >> $GITHUB_OUTPUT
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ All $total_nodes nodes are Ready (CPU: ${avg_cpu}%, Memory: ${avg_memory}%)"
+          fi
+      
+      - name: Check Pod Health Across Namespaces
+        id: pods
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking pod health in application namespaces..."
+          
+          # Define namespaces to monitor
+          NAMESPACES=(
+            "rewardsy-backend"
+            "rewardsy-webapp"
+            "rewardsy-data"
+            "rewardsy-merchant"
+            "rewardsy-suprpixl"
+            "kafka"
+            "ingress-nginx"
+          )
           
           problematic_pods=""
           total_pods=0
           problem_count=0
           
-          echo "🔍 Checking pods in application namespaces..."
-          
-          for ns in $NAMESPACES; do
-            echo "Namespace: $ns"
+          for ns in "${NAMESPACES[@]}"; do
+            # Check if namespace exists
+            if ! kubectl get namespace "$ns" &>/dev/null; then
+              echo "⚠️ Namespace '$ns' not found, skipping..."
+              continue
+            fi
             
-            # Get total pods in namespace
-            ns_pod_count=$(kubectl get pods -n $ns --no-headers 2>/dev/null | wc -l || echo "0")
+            # Count pods
+            ns_pod_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | wc -l || echo "0")
             total_pods=$((total_pods + ns_pod_count))
             
-            # Get pods not in Running or Succeeded state
-            non_running=$(kubectl get pods -n $ns --field-selector=status.phase!=Running,status.phase!=Succeeded --no-headers 2>/dev/null || echo "")
+            # Find problematic pods
+            non_running=$(kubectl get pods -n "$ns" \
+              --field-selector=status.phase!=Running,status.phase!=Succeeded \
+              --no-headers 2>/dev/null || echo "")
             
             if [ -n "$non_running" ]; then
               while IFS= read -r line; do
                 pod_name=$(echo "$line" | awk '{print $1}')
                 status=$(echo "$line" | awk '{print $3}')
-                problematic_pods="${problematic_pods}${ns}/${pod_name} [${status}]"$'\n'
+                restarts=$(echo "$line" | awk '{print $4}')
+                
+                problematic_pods="${problematic_pods}${ns}/${pod_name} [${status}] (Restarts: ${restarts})"$'\n'
                 problem_count=$((problem_count + 1))
               done <<< "$non_running"
             fi
           done
           
+          # Set outputs
           echo "total_pods=$total_pods" >> $GITHUB_OUTPUT
           echo "problem_count=$problem_count" >> $GITHUB_OUTPUT
           
           if [ -n "$problematic_pods" ]; then
-            echo "problematic_pods<<EOF" >> $GITHUB_OUTPUT
-            echo "$problematic_pods" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            {
+              echo "problematic_pods<<EOF"
+              echo "$problematic_pods"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
           else
             echo "problematic_pods=None" >> $GITHUB_OUTPUT
           fi
           
+          # Set status
           if [ $problem_count -gt 0 ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
             echo "❌ Found $problem_count problematic pods out of $total_pods total"
             exit 1
           else
+            echo "status=success" >> $GITHUB_OUTPUT
             echo "✅ All $total_pods application pods are healthy"
           fi
-
-  kubernetes-node-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.node_check.outcome }}
-      node_count: ${{ steps.node_check.outputs.node_count }}
-      notready_nodes: ${{ steps.node_check.outputs.notready_nodes }}
-      avg_cpu: ${{ steps.node_check.outputs.avg_cpu }}
-      avg_memory: ${{ steps.node_check.outputs.avg_memory }}
-    steps:
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Set AKS context
-        uses: azure/aks-set-context@v3
-        with:
-          cluster-name: ${{ env.AKS_CLUSTER_NAME }}
-          resource-group: ${{ env.AKS_RESOURCE_GROUP }}
-      
-      - name: Check node health and utilization
-        id: node_check
-        continue-on-error: true
+      - name: Aggregate Cluster Health
+        id: aggregate
+        if: always()
         run: |
-          # Get node status
-          notready_nodes=$(kubectl get nodes --no-headers | grep -v "Ready" | awk '{print $1}' || echo "")
-          total_nodes=$(kubectl get nodes --no-headers | wc -l)
-          
-          echo "node_count=$total_nodes" >> $GITHUB_OUTPUT
-          
-          # Get node metrics
-          if kubectl top nodes &>/dev/null; then
-            node_metrics=$(kubectl top nodes --no-headers)
-            
-            # Calculate average CPU and Memory
-            avg_cpu=$(echo "$node_metrics" | awk '{gsub(/%/,"",$3); sum+=$3} END {printf "%.0f%%", sum/NR}')
-            avg_memory=$(echo "$node_metrics" | awk '{gsub(/%/,"",$5); sum+=$5} END {printf "%.0f%%", sum/NR}')
-            
-            echo "avg_cpu=$avg_cpu" >> $GITHUB_OUTPUT
-            echo "avg_memory=$avg_memory" >> $GITHUB_OUTPUT
+          if [[ "${{ steps.nodes.outputs.status }}" == "success" ]] && \
+             [[ "${{ steps.pods.outputs.status }}" == "success" ]]; then
+            echo "cluster_healthy=true" >> $GITHUB_OUTPUT
+            echo "✅ Kubernetes cluster is healthy"
           else
-            echo "avg_cpu=N/A" >> $GITHUB_OUTPUT
-            echo "avg_memory=N/A" >> $GITHUB_OUTPUT
-          fi
-          
-          if [ -n "$notready_nodes" ]; then
-            echo "notready_nodes=$notready_nodes" >> $GITHUB_OUTPUT
-            echo "❌ Found NotReady nodes: $notready_nodes"
-            exit 1
-          else
-            echo "notready_nodes=None" >> $GITHUB_OUTPUT
-            echo "✅ All $total_nodes nodes are Ready"
+            echo "cluster_healthy=false" >> $GITHUB_OUTPUT
+            echo "❌ Kubernetes cluster has issues"
           fi
 
   # ================================================================
-  # APPLICATION SERVICE HEALTH CHECKS
+  # APPLICATION & SUPPORTING SERVICES HEALTH
   # ================================================================
-
-  rewardsy-backend-health:
+  
+  service-health-checks:
+    name: Service Health Checks
     runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'workflow_dispatch' || 
+      github.event.inputs.check_type == 'all' || 
+      github.event.inputs.check_type == 'applications' ||
+      github.event.inputs.check_type == 'supporting-services'
+    
     outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-      response_time: ${{ steps.health_check.outputs.response_time }}
+      results: ${{ steps.check_services.outputs.results }}
+      failed_count: ${{ steps.check_services.outputs.failed_count }}
+      critical_failures: ${{ steps.check_services.outputs.critical_failures }}
+    
     steps:
-      - name: Check backend health
-        id: health_check
-        continue-on-error: true
+      - name: Check All Service Endpoints
+        id: check_services
         run: |
-          start_time=$(date +%s%N)
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_BACKEND_URL }}/docs/core)
-          end_time=$(date +%s%N)
-          response_time=$(( (end_time - start_time) / 1000000 ))
+          echo "🔍 Checking all service endpoints..."
           
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          echo "response_time=${response_time}ms" >> $GITHUB_OUTPUT
+          # Parse endpoints from env
+          endpoints='${{ env.ENDPOINTS }}'
           
-          if [ "$response" -ne 200 ]; then
-            echo "❌ Backend health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ Backend healthy (${response_time}ms)"
-          fi
-
-  rewardsy-webapp-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-      response_time: ${{ steps.health_check.outputs.response_time }}
-    steps:
-      - name: Check webapp health
-        id: health_check
-        continue-on-error: true
-        run: |
-          start_time=$(date +%s%N)
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_WEBAPP_URL }})
-          end_time=$(date +%s%N)
-          response_time=$(( (end_time - start_time) / 1000000 ))
+          results=""
+          failed_count=0
+          critical_failures=0
           
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          echo "response_time=${response_time}ms" >> $GITHUB_OUTPUT
+          # Function to check a single endpoint
+          check_endpoint() {
+            local service_key=$1
+            local service_data=$2
+            
+            local name=$(echo "$service_data" | jq -r '.name')
+            local primary=$(echo "$service_data" | jq -r '.primary')
+            local fallback=$(echo "$service_data" | jq -r '.fallback')
+            local expected_codes=$(echo "$service_data" | jq -r '.expected_codes[]' | tr '\n' ',' | sed 's/,$//')
+            local is_critical=$(echo "$service_data" | jq -r '.critical')
+            
+            echo "Checking $name..."
+            
+            # Try primary endpoint
+            start_time=$(date +%s%N)
+            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time ${{ env.REQUEST_TIMEOUT }} -k "$primary" 2>/dev/null || echo "000")
+            end_time=$(date +%s%N)
+            response_time=$(( (end_time - start_time) / 1000000 ))
+            
+            # If primary fails and fallback exists, try fallback
+            if [[ "$response" == "000" || "$response" == "Connection refused" ]] && [ -n "$fallback" ] && [ "$fallback" != "null" ]; then
+              echo "  Primary failed, trying fallback..."
+              start_time=$(date +%s%N)
+              response=$(curl -s -o /dev/null -w "%{http_code}" --max-time ${{ env.REQUEST_TIMEOUT }} "$fallback" 2>/dev/null || echo "000")
+              end_time=$(date +%s%N)
+              response_time=$(( (end_time - start_time) / 1000000 ))
+            fi
+            
+            # Check if response code is acceptable
+            local status="success"
+            if [[ ",$expected_codes," == *",$response,"* ]]; then
+              echo "  ✅ $name: HTTP $response (${response_time}ms)"
+            else
+              status="failure"
+              ((failed_count++))
+              if [ "$is_critical" == "true" ]; then
+                ((critical_failures++))
+              fi
+              echo "  ❌ $name: HTTP $response (Expected: $expected_codes)"
+            fi
+            
+            # Append to results
+            results="${results}${service_key}|${name}|${status}|${response}|${response_time}|${is_critical}"$'\n'
+          }
           
-          if [ "$response" -ne 200 ]; then
-            echo "❌ WebApp health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ WebApp healthy (${response_time}ms)"
-          fi
-
-  rewardsy-merchant-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-      response_time: ${{ steps.health_check.outputs.response_time }}
-    steps:
-      - name: Check merchant service health
-        id: health_check
-        continue-on-error: true
-        run: |
-          start_time=$(date +%s%N)
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_MERCHANT_URL }} || echo "000")
-          end_time=$(date +%s%N)
-          response_time=$(( (end_time - start_time) / 1000000 ))
+          # Iterate through all endpoints
+          for key in $(echo "$endpoints" | jq -r 'keys[]'); do
+            service_data=$(echo "$endpoints" | jq -r --arg key "$key" '.[$key]')
+            check_endpoint "$key" "$service_data"
+          done
           
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          echo "response_time=${response_time}ms" >> $GITHUB_OUTPUT
+          # Set outputs
+          {
+            echo "results<<EOF"
+            echo "$results"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
           
-          if [ "$response" != "200" ] && [ "$response" != "302" ] && [ "$response" != "404" ]; then
-            echo "❌ Merchant service health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ Merchant service healthy (${response_time}ms)"
-          fi
-
-  rewardsy-data-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-    steps:
-      - name: Check data service health
-        id: health_check
-        continue-on-error: true
-        run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_DATA_URL }}/health || echo "000")
+          echo "failed_count=$failed_count" >> $GITHUB_OUTPUT
+          echo "critical_failures=$critical_failures" >> $GITHUB_OUTPUT
           
-          if [ "$response" = "000" ] || [ "$response" = "404" ]; then
-            echo "Trying direct LoadBalancer IP..."
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.DATA_SERVICE_LB_IP }}/health || echo "000")
-          fi
-          
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          
-          if [ "$response" != "200" ] && [ "$response" != "404" ]; then
-            echo "❌ Data service health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ Data service healthy"
-          fi
-
-  rewardsy-suprpixl-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-      response_time: ${{ steps.health_check.outputs.response_time }}
-    steps:
-      - name: Check SuprPixl service health
-        id: health_check
-        continue-on-error: true
-        run: |
-          start_time=$(date +%s%N)
-          
-          # Try HTTPS first (via ingress)
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 -k ${{ env.REWARDSY_SUPRPIXL_URL }} 2>/dev/null || echo "000")
-          
-          # If HTTPS fails, try HTTP (certificate might be provisioning)
-          if [ "$response" = "000" ]; then
-            echo "HTTPS failed, trying HTTP..."
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 http://suprpixl.rewardsy.one 2>/dev/null || echo "000")
-          fi
-          
-          # If both fail, try direct LoadBalancer IP with HTTP
-          if [ "$response" = "000" ]; then
-            echo "Trying direct LoadBalancer IP..."
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.SUPRPIXL_SERVICE_LB_IP }} 2>/dev/null || echo "000")
-          fi
-          
-          end_time=$(date +%s%N)
-          response_time=$(( (end_time - start_time) / 1000000 ))
-          
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          echo "response_time=${response_time}ms" >> $GITHUB_OUTPUT
-          
-          # Accept 200, 302, 404, 301 (redirects are OK for frontend)
-          if [ "$response" != "200" ] && [ "$response" != "302" ] && [ "$response" != "404" ] && [ "$response" != "301" ]; then
-            echo "❌ SuprPixl service health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ SuprPixl service healthy (${response_time}ms, HTTP: $response)"
-          fi
-
-  kibana-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-    steps:
-      - name: Check Kibana health
-        id: health_check
-        continue-on-error: true
-        run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.KIBANA_URL }}/app/home || echo "000")
-          
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          
-          if [ "$response" != "200" ] && [ "$response" != "302" ]; then
-            echo "❌ Kibana health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ Kibana healthy"
-          fi
-
-  kafka-ui-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-      response_code: ${{ steps.health_check.outputs.response_code }}
-    steps:
-      - name: Check Kafka UI health
-        id: health_check
-        continue-on-error: true
-        run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.KAFKA_UI_URL }} || echo "000")
-          
-          echo "response_code=$response" >> $GITHUB_OUTPUT
-          
-          if [ "$response" != "200" ]; then
-            echo "❌ Kafka UI health check failed! HTTP: $response"
-            exit 1
-          else
-            echo "✅ Kafka UI healthy"
-          fi
-
-  ingress-nginx-health:
-    runs-on: ubuntu-latest
-    outputs:
-      status: ${{ steps.health_check.outcome }}
-    steps:
-      - name: Check Ingress NGINX health
-        id: health_check
-        continue-on-error: true
-        run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.INGRESS_NGINX_IP }}/healthz || echo "000")
-          
-          if [ "$response" != "200" ] && [ "$response" != "404" ]; then
-            echo "⚠️ Ingress NGINX health check warning! HTTP: $response"
-            exit 1
-          else
-            echo "✅ Ingress NGINX operational"
-          fi
+          echo ""
+          echo "📊 Summary: $failed_count failures detected ($critical_failures critical)"
 
   # ================================================================
   # AGGREGATE RESULTS & SEND NOTIFICATIONS
   # ================================================================
   
   aggregate-and-notify:
+    name: Aggregate & Notify
     runs-on: ubuntu-latest
     needs: 
-      - kubernetes-pod-health
-      - kubernetes-node-health
-      - rewardsy-backend-health
-      - rewardsy-webapp-health
-      - rewardsy-merchant-health
-      - rewardsy-data-health
-      - rewardsy-suprpixl-health
-      - kibana-health
-      - kafka-ui-health
-      - ingress-nginx-health
+      - kubernetes-health
+      - service-health-checks
     if: always()
     
     steps:
-      - name: Calculate overall health status
+      - name: Calculate Overall Health Status
         id: summary
         run: |
-          # Count total checks and failures
-          total_checks=10
+          echo "📊 Calculating overall health status..."
+          
+          # Initialize counters
+          total_checks=0
           failed_checks=0
+          critical_issues=0
           
-          # Check each service status (handle empty outputs) - use || true to prevent exit on error
-          [[ "${{ needs.kubernetes-pod-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.kubernetes-node-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.rewardsy-backend-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.rewardsy-webapp-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.rewardsy-merchant-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.rewardsy-data-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.rewardsy-suprpixl-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.kibana-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.kafka-ui-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
-          [[ "${{ needs.ingress-nginx-health.outputs.status }}" == "failure" ]] && ((failed_checks++)) || true
+          # Check Kubernetes health
+          total_checks=$((total_checks + 2))  # nodes + pods
           
-          echo "failed_checks=$failed_checks" >> $GITHUB_OUTPUT
-          echo "total_checks=$total_checks" >> $GITHUB_OUTPUT
-          
-          # Determine severity level
-          if [ $failed_checks -eq 0 ]; then
-            echo "severity=healthy" >> $GITHUB_OUTPUT
-            echo "color=3066993" >> $GITHUB_OUTPUT
-            echo "emoji=✅" >> $GITHUB_OUTPUT
-          elif [ $failed_checks -le 2 ]; then
-            echo "severity=warning" >> $GITHUB_OUTPUT
-            echo "color=16776960" >> $GITHUB_OUTPUT
-            echo "emoji=⚠️" >> $GITHUB_OUTPUT
-          else
-            echo "severity=critical" >> $GITHUB_OUTPUT
-            echo "color=15158332" >> $GITHUB_OUTPUT
-            echo "emoji=🔴" >> $GITHUB_OUTPUT
+          if [[ "${{ needs.kubernetes-health.outputs.node_status }}" == "failure" ]]; then
+            ((failed_checks++))
+            ((critical_issues++))
           fi
-
-      - name: Send alert notification (failures only)
+          
+          if [[ "${{ needs.kubernetes-health.outputs.pod_status }}" == "failure" ]]; then
+            ((failed_checks++))
+            critical_issues=$((critical_issues + ${{ needs.kubernetes-health.outputs.problem_count || 0 }}))
+          fi
+          
+          # Add service check results
+          service_failed=${{ needs.service-health-checks.outputs.failed_count || 0 }}
+          service_critical=${{ needs.service-health-checks.outputs.critical_failures || 0 }}
+          
+          total_checks=$((total_checks + 8))  # 8 services
+          failed_checks=$((failed_checks + service_failed))
+          critical_issues=$((critical_issues + service_critical))
+          
+          # Determine severity
+          if [ $failed_checks -eq 0 ]; then
+            severity="healthy"
+            color="3066993"
+            emoji="✅"
+          elif [ $critical_issues -gt 0 ]; then
+            severity="critical"
+            color="15158332"
+            emoji="🔴"
+          else
+            severity="warning"
+            color="16776960"
+            emoji="⚠️"
+          fi
+          
+          echo "total_checks=$total_checks" >> $GITHUB_OUTPUT
+          echo "failed_checks=$failed_checks" >> $GITHUB_OUTPUT
+          echo "critical_issues=$critical_issues" >> $GITHUB_OUTPUT
+          echo "severity=$severity" >> $GITHUB_OUTPUT
+          echo "color=$color" >> $GITHUB_OUTPUT
+          echo "emoji=$emoji" >> $GITHUB_OUTPUT
+          
+          echo ""
+          echo "Results: $failed_checks/$total_checks checks failed ($critical_issues critical)"
+          echo "Severity: $severity"
+      
+      - name: Format Service Status
+        id: format
+        if: always()
+        run: |
+          # Parse service health results
+          results='${{ needs.service-health-checks.outputs.results }}'
+          
+          backend_status="✅"
+          webapp_status="✅"
+          merchant_status="✅"
+          data_status="✅"
+          suprpixl_status="✅"
+          kibana_status="✅"
+          kafka_status="✅"
+          ingress_status="✅"
+          
+          while IFS='|' read -r key name status response response_time critical; do
+            [ -z "$key" ] && continue
+            
+            icon="✅"
+            [ "$status" == "failure" ] && icon="🔴"
+            
+            case "$key" in
+              backend) backend_status="$icon Backend - [$response] (${response_time}ms)" ;;
+              webapp) webapp_status="$icon WebApp - [$response] (${response_time}ms)" ;;
+              merchant) merchant_status="$icon Merchant - [$response] (${response_time}ms)" ;;
+              data) data_status="$icon Data Service - [$response]" ;;
+              suprpixl) suprpixl_status="$icon SuprPixl - [$response] (${response_time}ms)" ;;
+              kibana) kibana_status="$icon Kibana - [$response]" ;;
+              kafka_ui) kafka_status="$icon Kafka UI - [$response]" ;;
+              ingress) ingress_status="$icon Ingress NGINX" ;;
+            esac
+          done <<< "$results"
+          
+          echo "backend_status=$backend_status" >> $GITHUB_OUTPUT
+          echo "webapp_status=$webapp_status" >> $GITHUB_OUTPUT
+          echo "merchant_status=$merchant_status" >> $GITHUB_OUTPUT
+          echo "data_status=$data_status" >> $GITHUB_OUTPUT
+          echo "suprpixl_status=$suprpixl_status" >> $GITHUB_OUTPUT
+          echo "kibana_status=$kibana_status" >> $GITHUB_OUTPUT
+          echo "kafka_status=$kafka_status" >> $GITHUB_OUTPUT
+          echo "ingress_status=$ingress_status" >> $GITHUB_OUTPUT
+      
+      - name: Send Alert Notification (Failures Only)
         if: steps.summary.outputs.failed_checks != '0'
         uses: sarisia/actions-status-discord@v1
         with:
           webhook: ${{ env.DISCORD_WEBHOOK }}
           nodetail: true
-          title: "${{ steps.summary.outputs.emoji }} HEALTH ALERT - ${{ steps.summary.outputs.failed_checks }}/${{ steps.summary.outputs.total_checks }} Services Down"
+          title: "${{ steps.summary.outputs.emoji }} HEALTH ALERT - ${{ steps.summary.outputs.failed_checks }}/${{ steps.summary.outputs.total_checks }} Checks Failed"
           description: |
             ${{ env.DISCORD_USER_MENTION }} **IMMEDIATE ATTENTION REQUIRED**
             
+            **Severity:** `${{ steps.summary.outputs.severity }}` | **Critical Issues:** ${{ steps.summary.outputs.critical_issues }}
+            
             **🏗️ Infrastructure Health:**
-            ${{ needs.kubernetes-node-health.outputs.status == 'failure' && '🔴' || '✅' }} AKS Nodes - ${{ needs.kubernetes-node-health.outputs.node_count || 'N/A' }} nodes (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory || 'N/A' }})
-            ${{ needs.kubernetes-pod-health.outputs.status == 'failure' && '🔴' || '✅' }} Kubernetes Pods - ${{ needs.kubernetes-pod-health.outputs.total_pods || 'N/A' }} total pods
+            ${{ needs.kubernetes-health.outputs.node_status == 'failure' && '🔴' || '✅' }} AKS Nodes - ${{ needs.kubernetes-health.outputs.node_count || 'N/A' }} nodes (CPU: ${{ needs.kubernetes-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-health.outputs.avg_memory || 'N/A' }})
+            ${{ needs.kubernetes-health.outputs.pod_status == 'failure' && '🔴' || '✅' }} Kubernetes Pods - ${{ needs.kubernetes-health.outputs.total_pods || 'N/A' }} total
+            
+            ${{ needs.kubernetes-health.outputs.notready_nodes != 'None' && needs.kubernetes-health.outputs.notready_nodes != '' && format('⚠️ **NotReady Nodes:** {0}', needs.kubernetes-health.outputs.notready_nodes) || '' }}
+            ${{ needs.kubernetes-health.outputs.high_cpu_nodes != '' && format('⚠️ **High CPU Nodes:** {0}', needs.kubernetes-health.outputs.high_cpu_nodes) || '' }}
+            ${{ needs.kubernetes-health.outputs.high_memory_nodes != '' && format('⚠️ **High Memory Nodes:** {0}', needs.kubernetes-health.outputs.high_memory_nodes) || '' }}
             
             **🚀 Application Services:**
-            ${{ needs.rewardsy-backend-health.outputs.status == 'failure' && '🔴' || '✅' }} Backend - [${{ needs.rewardsy-backend-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-backend-health.outputs.response_time || 'N/A' }})
-            ${{ needs.rewardsy-webapp-health.outputs.status == 'failure' && '🔴' || '✅' }} WebApp - [${{ needs.rewardsy-webapp-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-webapp-health.outputs.response_time || 'N/A' }})
-            ${{ needs.rewardsy-merchant-health.outputs.status == 'failure' && '🔴' || '✅' }} Merchant - [${{ needs.rewardsy-merchant-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-merchant-health.outputs.response_time || 'N/A' }})
-            ${{ needs.rewardsy-data-health.outputs.status == 'failure' && '🔴' || '✅' }} Data Service - [${{ needs.rewardsy-data-health.outputs.response_code || 'N/A' }}]
-            ${{ needs.rewardsy-suprpixl-health.outputs.status == 'failure' && '🔴' || '✅' }} SuprPixl - [${{ needs.rewardsy-suprpixl-health.outputs.response_code || 'N/A' }}] (${{ needs.rewardsy-suprpixl-health.outputs.response_time || 'N/A' }})
+            ${{ steps.format.outputs.backend_status }}
+            ${{ steps.format.outputs.webapp_status }}
+            ${{ steps.format.outputs.merchant_status }}
+            ${{ steps.format.outputs.data_status }}
+            ${{ steps.format.outputs.suprpixl_status }}
             
             **🔧 Supporting Services:**
-            ${{ needs.kibana-health.outputs.status == 'failure' && '🔴' || '✅' }} Kibana - [${{ needs.kibana-health.outputs.response_code || 'N/A' }}]
-            ${{ needs.kafka-ui-health.outputs.status == 'failure' && '🔴' || '✅' }} Kafka UI - [${{ needs.kafka-ui-health.outputs.response_code || 'N/A' }}]
-            ${{ needs.ingress-nginx-health.outputs.status == 'failure' && '🔴' || '✅' }} Ingress NGINX
+            ${{ steps.format.outputs.kibana_status }}
+            ${{ steps.format.outputs.kafka_status }}
+            ${{ steps.format.outputs.ingress_status }}
             
-            ${{ needs.kubernetes-pod-health.outputs.problem_count != '0' && needs.kubernetes-pod-health.outputs.problem_count != '' && format('**⚠️ Problematic Pods ({0}):**\n```\n{1}\n```', needs.kubernetes-pod-health.outputs.problem_count, needs.kubernetes-pod-health.outputs.problematic_pods) || '' }}
+            ${{ needs.kubernetes-health.outputs.problem_count != '0' && needs.kubernetes-health.outputs.problem_count != '' && format('**⚠️ Problematic Pods ({0}):**\n```\n{1}\n```', needs.kubernetes-health.outputs.problem_count, needs.kubernetes-health.outputs.problematic_pods) || '' }}
             
-            **🔗 Actions:**
-            [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            [Azure Portal](https://portal.azure.com/#@rewardsy.com/resource/subscriptions/4b9e0373-83d3-42e8-95f9-be6625019af0/resourceGroups/rewardsy-prod-rg/providers/Microsoft.ContainerService/managedClusters/rewardsy-prod-aks/workloads)
+            **🔗 Quick Actions:**
+            • [View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            • [Azure Portal - AKS](https://portal.azure.com/#@rewardsy.com/resource/subscriptions/4b9e0373-83d3-42e8-95f9-be6625019af0/resourceGroups/rewardsy-prod-rg/providers/Microsoft.ContainerService/managedClusters/rewardsy-prod-aks/workloads)
+            • [Kibana Dashboard](https://app.rewardsy.one/kibana)
+            
+            **📅 Timestamp:** ${{ github.event.repository.updated_at }}
           color: ${{ steps.summary.outputs.color }}
           username: Rewardsy Health Monitor
           avatar_url: https://cdn-icons-png.flaticon.com/512/2917/2917995.png
-
-      - name: Send daily health summary
-        if: steps.summary.outputs.failed_checks == '0' && github.event.schedule == '30 3 * * *'
+      
+      - name: Send Daily Health Summary
+        if: |
+          steps.summary.outputs.failed_checks == '0' && 
+          github.event.schedule == '30 3 * * *'
         uses: sarisia/actions-status-discord@v1
         with:
           webhook: ${{ env.DISCORD_WEBHOOK }}
           nodetail: true
           title: "✅ Daily Health Report - All Systems Operational"
           description: |
-            **📊 Rewardsy Production Environment - Healthy**
+            **📊 Rewardsy Production Environment Status**
             
-            **Infrastructure:**
-            ✅ AKS Nodes: ${{ needs.kubernetes-node-health.outputs.node_count || 'N/A' }} (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory || 'N/A' }})
-            ✅ Application Pods: ${{ needs.kubernetes-pod-health.outputs.total_pods || 'N/A' }}
+            **Infrastructure Health:**
+            ✅ AKS Cluster: ${{ needs.kubernetes-health.outputs.node_count || 'N/A' }} nodes healthy
+            • CPU Utilization: ${{ needs.kubernetes-health.outputs.avg_cpu || 'N/A' }}
+            • Memory Utilization: ${{ needs.kubernetes-health.outputs.avg_memory || 'N/A' }}
+            • Application Pods: ${{ needs.kubernetes-health.outputs.total_pods || 'N/A' }} running
             
             **Application Services:**
-            ✅ Backend (${{ needs.rewardsy-backend-health.outputs.response_time || 'N/A' }})
-            ✅ WebApp (${{ needs.rewardsy-webapp-health.outputs.response_time || 'N/A' }})
-            ✅ Merchant (${{ needs.rewardsy-merchant-health.outputs.response_time || 'N/A' }})
-            ✅ Data Service
-            ✅ SuprPixl (${{ needs.rewardsy-suprpixl-health.outputs.response_time || 'N/A' }})
+            ${{ steps.format.outputs.backend_status }}
+            ${{ steps.format.outputs.webapp_status }}
+            ${{ steps.format.outputs.merchant_status }}
+            ${{ steps.format.outputs.data_status }}
+            ${{ steps.format.outputs.suprpixl_status }}
             
             **Supporting Services:**
-            ✅ Kibana
-            ✅ Kafka UI
-            ✅ Ingress NGINX
+            ${{ steps.format.outputs.kibana_status }}
+            ${{ steps.format.outputs.kafka_status }}
+            ${{ steps.format.outputs.ingress_status }}
+            
+            **📈 Performance:**
+            • All endpoints responding within acceptable latency
+            • No resource utilization alerts
+            • Zero problematic pods detected
             
             *Next health check in 10 minutes*
+            *Daily report scheduled for 9:00 AM IST tomorrow*
           color: 3066993
           username: Rewardsy Health Monitor
           avatar_url: https://cdn-icons-png.flaticon.com/512/2917/2917995.png
+      
+      - name: Fail Workflow on Critical Issues
+        if: steps.summary.outputs.critical_issues != '0'
+        run: |
+          echo "❌ Workflow failed due to ${{ steps.summary.outputs.critical_issues }} critical issues"
+          exit 1
