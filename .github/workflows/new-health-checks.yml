@@ -47,7 +47,7 @@ env:
     {
       "backend": {
         "name": "Backend API",
-        "primary": "https://app.rewardsy.one/rewardsy-backend/docs/core",
+        "primary": "https://app.rewardsy.one//INTENTIONAL_FAIL_TEST",
         "fallback": "",
         "expected_codes": [200],
         "critical": true
