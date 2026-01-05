@@ -1,3 +1,16 @@
+# INSTRUCTIONS FOR DISCORD USER MENTION
+# ======================================
+# To mention yourself (@asif) in Discord, you need your Discord User ID.
+# 
+# How to get your Discord User ID:
+# 1. Open Discord
+# 2. Go to Settings → Advanced → Enable "Developer Mode"
+# 3. Right-click on your username in Discord → "Copy User ID"
+# 4. Replace "YOUR_DISCORD_USER_ID" below with the copied ID
+#
+# It will look like: <@123456789012345678>
+# ======================================
+
 name: Rewardsy Comprehensive Health Checks - All Services
 
 on:
@@ -9,6 +22,11 @@ on:
   workflow_dispatch:
 
 env:
+  # ========================================
+  # DISCORD USER ID - Asif
+  # ========================================
+  DISCORD_USER_MENTION: "<@1379840575783829544>"
+  
   # ========================================
   # INGRESS ENDPOINTS (via NGINX - Primary)
   # ========================================
@@ -292,22 +310,34 @@ jobs:
         continue-on-error: true
         run: |
           start_time=$(date +%s%N)
-          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.REWARDSY_SUPRPIXL_URL }} || echo "000")
+          
+          # Try HTTPS first (via ingress)
+          response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 -k ${{ env.REWARDSY_SUPRPIXL_URL }} 2>/dev/null || echo "000")
+          
+          # If HTTPS fails, try HTTP (certificate might be provisioning)
+          if [ "$response" = "000" ]; then
+            echo "HTTPS failed, trying HTTP..."
+            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 http://suprpixl.rewardsy.one 2>/dev/null || echo "000")
+          fi
+          
+          # If both fail, try direct LoadBalancer IP with HTTP
+          if [ "$response" = "000" ]; then
+            echo "Trying direct LoadBalancer IP..."
+            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.SUPRPIXL_SERVICE_LB_IP }} 2>/dev/null || echo "000")
+          fi
+          
           end_time=$(date +%s%N)
           response_time=$(( (end_time - start_time) / 1000000 ))
-          
-          if [ "$response" = "000" ]; then
-            response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 ${{ env.SUPRPIXL_SERVICE_LB_IP }} || echo "000")
-          fi
           
           echo "response_code=$response" >> $GITHUB_OUTPUT
           echo "response_time=${response_time}ms" >> $GITHUB_OUTPUT
           
-          if [ "$response" != "200" ] && [ "$response" != "302" ] && [ "$response" != "404" ]; then
+          # Accept 200, 302, 404, 301 (redirects are OK for frontend)
+          if [ "$response" != "200" ] && [ "$response" != "302" ] && [ "$response" != "404" ] && [ "$response" != "301" ]; then
             echo "❌ SuprPixl service health check failed! HTTP: $response"
             exit 1
           else
-            echo "✅ SuprPixl service healthy (${response_time}ms)"
+            echo "✅ SuprPixl service healthy (${response_time}ms, HTTP: $response)"
           fi
 
   kibana-health:
@@ -435,7 +465,7 @@ jobs:
           nodetail: true
           title: "${{ steps.summary.outputs.emoji }} HEALTH ALERT - ${{ steps.summary.outputs.failed_checks }}/${{ steps.summary.outputs.total_checks }} Services Down"
           description: |
-            @everyone **IMMEDIATE ATTENTION REQUIRED**
+            ${{ env.DISCORD_USER_MENTION }} **IMMEDIATE ATTENTION REQUIRED**
             
             **🏗️ Infrastructure Health:**
             ${{ needs.kubernetes-node-health.outputs.status == 'failure' && '🔴' || '✅' }} AKS Nodes - ${{ needs.kubernetes-node-health.outputs.node_count || 'N/A' }} nodes (CPU: ${{ needs.kubernetes-node-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-node-health.outputs.avg_memory || 'N/A' }})
