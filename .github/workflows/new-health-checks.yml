@@ -47,7 +47,7 @@ env:
     {
       "backend": {
         "name": "Backend API",
-        "primary": "https://app.rewardsy.one//INTENTIONAL_FAIL_TEST",
+        "primary": "https://app.rewardsy.one/rewardsy-backend/docs/core",
         "fallback": "",
         "expected_codes": [200],
         "critical": true
@@ -534,6 +534,40 @@ jobs:
             
             **📅 Timestamp:** ${{ github.event.repository.updated_at }}
           color: ${{ steps.summary.outputs.color }}
+          username: Rewardsy Health Monitor
+          avatar_url: https://cdn-icons-png.flaticon.com/512/2917/2917995.png
+      
+      - name: Send Manual Run Success Notification
+        if: |
+          steps.summary.outputs.failed_checks == '0' && 
+          github.event_name == 'workflow_dispatch'
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ env.DISCORD_WEBHOOK }}
+          nodetail: true
+          title: "✅ Manual Health Check - All Systems Operational"
+          description: |
+            **📊 Manual Health Check Results**
+            
+            **Infrastructure:**
+            ✅ AKS Nodes: ${{ needs.kubernetes-health.outputs.node_count || 'N/A' }} (CPU: ${{ needs.kubernetes-health.outputs.avg_cpu || 'N/A' }}, Memory: ${{ needs.kubernetes-health.outputs.avg_memory || 'N/A' }})
+            ✅ Application Pods: ${{ needs.kubernetes-health.outputs.total_pods || 'N/A' }}
+            
+            **Application Services:**
+            ${{ steps.format.outputs.backend_status }}
+            ${{ steps.format.outputs.webapp_status }}
+            ${{ steps.format.outputs.merchant_status }}
+            ${{ steps.format.outputs.data_status }}
+            ${{ steps.format.outputs.suprpixl_status }}
+            
+            **Supporting Services:**
+            ${{ steps.format.outputs.kibana_status }}
+            ${{ steps.format.outputs.kafka_status }}
+            ${{ steps.format.outputs.ingress_status }}
+            
+            **✓ Manual health check completed successfully**
+            *Triggered by: ${{ github.actor }}*
+          color: 3066993
           username: Rewardsy Health Monitor
           avatar_url: https://cdn-icons-png.flaticon.com/512/2917/2917995.png
       
