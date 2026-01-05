@@ -24,7 +24,7 @@ env:
   # DISCORD CONFIGURATION
   # ========================================
   DISCORD_USER_MENTION: "<@1379840575783829544>"
-  DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
   
   # ========================================
   # AZURE AKS CONFIGURATION
@@ -492,6 +492,21 @@ jobs:
           echo "kibana_status=$kibana_status" >> $GITHUB_OUTPUT
           echo "kafka_status=$kafka_status" >> $GITHUB_OUTPUT
           echo "ingress_status=$ingress_status" >> $GITHUB_OUTPUT
+      
+      - name: Debug - Check Notification Conditions
+        if: always()
+        run: |
+          echo "=== NOTIFICATION DEBUG INFO ==="
+          echo "Failed checks: '${{ steps.summary.outputs.failed_checks }}'"
+          echo "Event name: '${{ github.event_name }}'"
+          echo "Schedule: '${{ github.event.schedule }}'"
+          echo "Webhook configured: ${{ env.DISCORD_WEBHOOK != '' }}"
+          echo "Webhook length: ${#DISCORD_WEBHOOK}"
+          echo ""
+          echo "=== CONDITION EVALUATION ==="
+          echo "Should send failure alert: ${{ steps.summary.outputs.failed_checks != '0' }}"
+          echo "Should send manual run notification: ${{ steps.summary.outputs.failed_checks == '0' && github.event_name == 'workflow_dispatch' }}"
+          echo "Should send daily summary: ${{ steps.summary.outputs.failed_checks == '0' && github.event.schedule == '30 3 * * *' }}"
       
       - name: Send Alert Notification (Failures Only)
         if: steps.summary.outputs.failed_checks != '0'
