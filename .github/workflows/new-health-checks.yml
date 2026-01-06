@@ -68,8 +68,8 @@ env:
       },
       "data": {
         "name": "Data Service",
-        "primary": "https://app.rewardsy.one/rewardsy-data/health",
-        "fallback": "http://4.213.202.43/health",
+        "primary": "https://app.rewardsy.one/rewardsy-data/",
+        "fallback": "http://4.213.202.43/",
         "expected_codes": [200, 404],
         "critical": true
       },
